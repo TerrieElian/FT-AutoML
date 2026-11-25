@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vingerquiz</title>
+<style>
+  :root { --bg:#0b1020; --card:#151c33; --line:#26304f; --opt:#1d2744; --accent:#38bdf8; --ok:#22c55e; --bad:#ef4444; }
+  * { box-sizing:border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background:radial-gradient(circle at 20% 0%, #1e2a52 0%, var(--bg) 55%) fixed; color:#f1f5f9; margin:0; padding:24px 16px; display:flex; justify-content:center; min-height:100vh; }
+  .wrap { width:100%; max-width:560px; }
+  h1 { margin:0 0 16px; font-size:2rem; text-align:center; letter-spacing:-.5px; color:var(--accent); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:22px; margin-bottom:16px; box-shadow:0 10px 30px rgba(0,0,0,.35); }
+  input, button { font:inherit; padding:12px 14px; border-radius:12px; border:1px solid var(--line); }
+  input { width:100%; margin-bottom:12px; background:var(--opt); color:inherit; }
+  input:focus { outline:2px solid var(--accent); border-color:transparent; }
+  button.main { background:linear-gradient(90deg,#22c55e,#16a34a); color:#04210f; font-weight:700; width:100%; cursor:pointer; border:0; transition:transform .1s, filter .15s; }
+  button.main:hover:not(:disabled) { filter:brightness(1.1); }
+  button.main:active:not(:disabled) { transform:scale(.98); }
+  button.main:disabled { opacity:.6; cursor:wait; }
+  .opt { display:flex; gap:12px; align-items:center; background:var(--opt); border:2px solid transparent; border-radius:14px; padding:12px 14px; margin:10px 0; cursor:pointer; transition:transform .12s, border-color .15s, background .2s; }
+  .opt:hover { border-color:var(--accent); transform:translateX(3px); }
+  .opt .n { background:var(--accent); color:#06283d; font-weight:800; border-radius:50%; width:32px; height:32px; display:flex; align-items:center; justify-content:center; flex:none; }
+  .opt.good { background:#15803d; border-color:#4ade80; }
+  .opt.bad { background:#b91c1c; border-color:#f87171; }
+  .bar { height:10px; background:var(--opt); border-radius:6px; overflow:hidden; margin-top:12px; }
+  .bar > div { height:100%; width:0; background:linear-gradient(90deg,#38bdf8,#22c55e); transition:width .1s linear; }
+  #cam canvas { width:100%; max-width:260px; border-radius:14px; display:block; margin:12px auto 0; border:2px solid var(--line); }
+  .row { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:.9rem; margin-bottom:6px; }
+  .row span { background:var(--opt); padding:4px 12px; border-radius:999px; font-weight:600; }
+  #timer { color:#fbbf24; }
+  #question { margin:14px 0 6px; font-size:1.35rem; line-height:1.3; }
+  .hidden { display:none; }
+  ol { padding-left:0; margin:8px 0 0; list-style:none; counter-reset:r; }
+  ol li { counter-increment:r; display:flex; gap:10px; background:var(--opt); border-radius:10px; padding:8px 12px; margin:6px 0; }
+  ol li::before { content:counter(r); font-weight:800; color:var(--accent); min-width:1.2em; }
+  ol li:first-child { border:1px solid #fbbf24; }
+  small { opacity:.7; }
+  #game > p { margin:8px 0 0; text-align:center; }
+  @media (min-width:820px) {
+    .wrap { max-width:900px; }
+    #game { display:grid; grid-template-columns:1fr 280px; column-gap:28px; align-items:start; }
+    #game > .row, #game > #question, #game > #options { grid-column:1; }
+    #game > .bar, #game > p { grid-column:1; }
+    #game > #cam { grid-column:2; grid-row:1 / span 5; position:sticky; top:16px; }
+    #cam canvas { margin-top:0; max-width:280px; }
+  }
+</style>
+</head>
+<body>
+<!--
+  SNEL STARTEN
+  1. Plak je Teachable Machine link in MODEL_URL (moet eindigen op /).
+     Klassen in je model moeten heten: 1, 2, 3, 4 en geen
+  2. Optioneel: Supabase voor de scores. Vul SUPABASE_URL en SUPABASE_KEY (anon key) in.
+     Maak de tabel met deze SQL:
+       create table scores (id bigint generated always as identity primary key, name text, score int, created_at timestamptz default now());
+       alter table scores enable row level security;
+       create policy "ins" on scores for insert to anon with check (true);
+       create policy "sel" on scores for select to anon using (true);
+     Zonder Supabase worden scores lokaal in de browser bewaard.
+  3. Zonder model werkt de quiz ook: klik op een antwoord of druk toets 1 tot 4.
+-->
+<div class="wrap">
+  <h1>Vingerquiz</h1>
+
+  <div id="start" class="card">
+    <p>Antwoord met je vingers: 1 vinger = A, 2 = B, 3 = C, 4 = D. Houd je gebaar ongeveer 1 seconde stil.</p>
+    <input id="name" placeholder="Jouw naam" maxlength="20">
+    <button class="main" id="go">Start</button>
+    <p><small id="status"></small></p>
+  </div>
+
+  <div id="game" class="card hidden">
+    <div class="row"><span id="qnum"></span><span id="timer"></span><span id="score"></span></div>
+    <h2 id="question" style="margin:10px 0"></h2>
+    <div id="options"></div>
+    <div class="bar"><div id="hold"></div></div>
+    <p><small id="pred">...</small></p>
+    <div id="cam"></div>
+  </div>
+
+  <div id="end" class="card hidden">
+    <h2>Klaar! Score: <span id="final"></span></h2>
+    <h3>Top 10</h3>
+    <ol id="board"></ol>
+    <button class="main" id="again" style="margin-top:12px">Opnieuw spelen</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+<script>
+// ===== INSTELLINGEN =====
+const MODEL_URL = "https://teachablemachine.withgoogle.com/models/lH6D405it/";
+const SUPABASE_URL = ""; // bv. https://abc.supabase.co
+const SUPABASE_KEY = ""; // anon key
+const CLASS_TO_ANSWER = { "A": 0, "B": 1, "C": 2, "D": 3 };
+const THRESHOLD = 0.9;   // zekerheid
+const HOLD_MS = 1000;    // gebaar moet zo lang stabiel zijn
+const TIME_PER_Q = 20;   // seconden per vraag
+const GRACE_MS = 2500;   // pauze na nieuwe vraag: gebaren tellen nog niet
+let armedAt = 0;
+
+// ===== VRAGEN (pas gerust aan) =====
+const QUESTIONS = [
+  { q: "Wat is overfitting?", a: ["Model leert trainingsdata te goed en faalt op nieuwe data", "Model is te simpel", "Model traint te snel", "Model heeft te weinig klassen"], c: 0 },
+  { q: "Waarvoor staat AUC?", a: ["Average User Count", "Area Under the Curve", "Automatic Unit Check", "Accuracy Under Control"], c: 1 },
+  { q: "Wat doet AutoML?", a: ["Schrijft je website", "Maakt foto's", "Probeert automatisch veel modellen en kiest het beste", "Verwijdert je dataset"], c: 2 },
+  { q: "Waarom heeft de camera op een website HTTPS nodig?", a: ["Voor snellere beelden", "Voor meer pixels", "Voor kleur", "Camera werkt enkel op een beveiligde verbinding"], c: 3 },
+  { q: "Wat is underfitting?", a: ["Model is te simpel en scoort overal slecht", "Model onthoudt alles", "Model is te groot", "Model heeft te veel data"], c: 0 },
+  { q: "Waarmee draait een Teachable Machine model in de browser?", a: ["PHP", "TensorFlow.js", "Excel", "Photoshop"], c: 1 },
+  { q: "Wat is een klasse in Teachable Machine?", a: ["Een schoolvak", "Een CSS regel", "Een categorie die het model leert herkennen", "Een database"], c: 2 },
+  { q: "Wat doet een zekerheidsdrempel van 90%?", a: ["Telt enkel voorspellingen vanaf 90% zekerheid", "Maakt het model 90% sneller", "Wist 90% van de data", "Verkleint de foto"], c: 0 }
+];
+
+// ===== STATE =====
+let model, webcam, qi = 0, score = 0, timeLeft = TIME_PER_Q, timerId = null;
+let active = false, holdClass = null, holdStart = 0, modelReady = false, playerName = "";
+
+const $ = id => document.getElementById(id);
+const demo = MODEL_URL.includes("XXXX");
+$("status").textContent = demo ? "Geen model ingesteld: demo met klikken of toetsen 1 tot 4." : "Model wordt geladen bij start.";
+
+$("go").onclick = start;
+$("again").onclick = () => { $("end").classList.add("hidden"); $("start").classList.remove("hidden"); };
+document.addEventListener("keydown", e => { if (active && "1234".includes(e.key)) answer(Number(e.key) - 1); });
+
+async function start() {
+  playerName = $("name").value.trim() || "Anoniem";
+  $("go").disabled = true;
+  if (!demo && !modelReady) {
+    try {
+      $("status").textContent = "Model en camera laden...";
+      model = await tmImage.load(MODEL_URL + "model.json", MODEL_URL + "metadata.json");
+      webcam = new tmImage.Webcam(300, 300, true);
+      await webcam.setup();
+      await webcam.play();
+      $("cam").appendChild(webcam.canvas);
+      modelReady = true;
+      requestAnimationFrame(loop);
+    } catch (e) {
+      $("status").textContent = "Camera of model fout: " + e.message + ". Demo met klikken werkt nog.";
+    }
+  }
+  $("go").disabled = false;
+  qi = 0; score = 0;
+  $("start").classList.add("hidden");
+  $("game").classList.remove("hidden");
+  showQuestion();
+}
+
+function showQuestion() {
+  const item = QUESTIONS[qi];
+  $("qnum").textContent = `Vraag ${qi + 1}/${QUESTIONS.length}`;
+  $("score").textContent = `Score: ${score}`;
+  $("question").textContent = item.q;
+  $("options").innerHTML = "";
+  item.a.forEach((txt, i) => {
+    const d = document.createElement("div");
+    d.className = "opt";
+    d.innerHTML = `<span class="n">${i + 1}</span><span></span>`;
+    d.lastChild.textContent = `${"ABCD"[i]}: ${txt}`;
+    d.onclick = () => answer(i);
+    $("options").appendChild(d);
+  });
+  timeLeft = TIME_PER_Q;
+  $("timer").textContent = `${timeLeft}s`;
+  holdClass = null; $("hold").style.width = "0";
+  armedAt = performance.now() + GRACE_MS;
+  active = true;
+  clearInterval(timerId);
+  timerId = setInterval(() => {
+    timeLeft -= 0.25;
+    $("timer").textContent = `${Math.ceil(timeLeft)}s`;
+    if (timeLeft <= 0) answer(-1);
+  }, 250);
+}
+
+function answer(i) {
+  if (!active) return;
+  active = false;
+  clearInterval(timerId);
+  const item = QUESTIONS[qi];
+  const opts = $("options").children;
+  if (i >= 0) opts[i].classList.add(i === item.c ? "good" : "bad");
+  opts[item.c].classList.add("good");
+  if (i === item.c) score += 10 + Math.ceil(timeLeft / 2);
+  $("score").textContent = `Score: ${score}`;
+  setTimeout(() => {
+    qi++;
+    if (qi < QUESTIONS.length) showQuestion(); else finish();
+  }, 2500);
+}
+
+async function loop() {
+  webcam.update();
+  const preds = await model.predict(webcam.canvas);
+  const best = preds.reduce((a, b) => (b.probability > a.probability ? b : a));
+  const waiting = performance.now() < armedAt;
+  $("pred").textContent = waiting ? "Even wachten, laat je hand zakken..." : `Gezien: ${best.className} (${Math.round(best.probability * 100)}%)`;
+  if (active && waiting) { holdClass = null; $("hold").style.width = "0"; }
+  else if (active) {
+    const idx = CLASS_TO_ANSWER[best.className];
+    if (best.probability >= THRESHOLD && idx !== undefined) {
+      if (holdClass !== best.className) { holdClass = best.className; holdStart = performance.now(); }
+      const p = Math.min(1, (performance.now() - holdStart) / HOLD_MS);
+      $("hold").style.width = p * 100 + "%";
+      if (p >= 1) { holdClass = null; $("hold").style.width = "0"; answer(idx); }
+    } else { holdClass = null; $("hold").style.width = "0"; }
+  }
+  requestAnimationFrame(loop);
+}
+
+async function finish() {
+  $("game").classList.add("hidden");
+  $("end").classList.remove("hidden");
+  $("final").textContent = score;
+  const list = await saveAndLoad();
+  $("board").innerHTML = "";
+  list.forEach(r => { const li = document.createElement("li"); li.textContent = `${r.name}: ${r.score}`; $("board").appendChild(li); });
+}
+
+async function saveAndLoad() {
+  if (SUPABASE_URL && SUPABASE_KEY) {
+    try {
+      const h = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
+      await fetch(`${SUPABASE_URL}/rest/v1/scores`, { method: "POST", headers: h, body: JSON.stringify({ name: playerName, score }) });
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/scores?select=name,score&order=score.desc&limit=10`, { headers: h });
+      return await r.json();
+    } catch (e) { /* val terug op lokaal */ }
+  }
+  let all = [];
+  try { all = JSON.parse(localStorage.getItem("scores") || "[]"); } catch (e) {}
+  all.push({ name: playerName, score });
+  all.sort((a, b) => b.score - a.score);
+  all = all.slice(0, 10);
+  try { localStorage.setItem("scores", JSON.stringify(all)); } catch (e) {}
+  return all;
+}
+</script>
+</body>
+</html>
